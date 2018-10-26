@@ -8,7 +8,7 @@ use tokio_reactor::Handle;
 use tokio_tcp::TcpListener;
 use tokio_timer::Delay;
 
-use self::addr_stream::AddrStream;
+pub use self::addr_stream::AddrStream;
 
 /// A stream of connections from binding to an address.
 #[must_use = "streams do nothing unless polled"]
@@ -194,6 +194,7 @@ mod addr_stream {
     use tokio_io::{AsyncRead, AsyncWrite};
 
 
+    /// dox
     #[derive(Debug)]
     pub struct AddrStream {
         inner: TcpStream,
@@ -211,6 +212,12 @@ mod addr_stream {
         /// Returns the remote (peer) address of this connection.
         #[inline]
         pub fn remote_addr(&self) -> SocketAddr {
+            self.remote_addr
+        }
+    }
+
+    impl ::server::conn::RemoteAddr for AddrStream {
+        fn remote_addr(&self) -> SocketAddr {
             self.remote_addr
         }
     }

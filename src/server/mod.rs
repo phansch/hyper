@@ -65,10 +65,10 @@ use tokio_io::{AsyncRead, AsyncWrite};
 
 use body::{Body, Payload};
 use common::exec::{Exec, H2Exec, NewSvcExec};
-use service::{NewService, Service};
+use service::Service;
 // Renamed `Http` as `Http_` for now so that people upgrading don't see an
 // error that `hyper::server::Http` is private...
-use self::conn::{Http as Http_, NoopWatcher, SpawnAll};
+use self::conn::{Http as Http_, MakeService, NoopWatcher, SpawnAll};
 use self::shutdown::{Graceful, GracefulWatcher};
 #[cfg(feature = "runtime")] use self::tcp::AddrIncoming;
 
@@ -144,12 +144,12 @@ where
     I: Stream,
     I::Error: Into<Box<::std::error::Error + Send + Sync>>,
     I::Item: AsyncRead + AsyncWrite + Send + 'static,
-    S: NewService<ReqBody=Body, ResBody=B>,
-    S::Error: Into<Box<::std::error::Error + Send + Sync>>,
-    S::Service: 'static,
+    S: MakeService<I::Item, ReqBody=Body, ResBody=B, ResBody2=B>,
+    S::Error2: Into<Box<::std::error::Error + Send + Sync>>,
+    S::Service2: 'static,
     B: Payload,
-    E: H2Exec<<S::Service as Service>::Future, B>,
-    E: NewSvcExec<I::Item, S::Future, S::Service, E, GracefulWatcher>,
+    E: H2Exec<<S::Service2 as Service>::Future, B>,
+    E: NewSvcExec<I::Item, S::Future2, S::Service2, E, GracefulWatcher>,
 {
     /// Prepares a server to handle graceful shutdown when the provided future
     /// completes.
@@ -203,12 +203,12 @@ where
     I: Stream,
     I::Error: Into<Box<::std::error::Error + Send + Sync>>,
     I::Item: AsyncRead + AsyncWrite + Send + 'static,
-    S: NewService<ReqBody=Body, ResBody=B>,
-    S::Error: Into<Box<::std::error::Error + Send + Sync>>,
-    S::Service: 'static,
+    S: MakeService<I::Item, ReqBody=Body, ResBody=B, ResBody2=B>,
+    S::Error2: Into<Box<::std::error::Error + Send + Sync>>,
+    S::Service2: 'static,
     B: Payload,
-    E: H2Exec<<S::Service as Service>::Future, B>,
-    E: NewSvcExec<I::Item, S::Future, S::Service, E, NoopWatcher>,
+    E: H2Exec<<S::Service2 as Service>::Future, B>,
+    E: NewSvcExec<I::Item, S::Future2, S::Service2, E, NoopWatcher>,
 {
     type Item = ();
     type Error = ::Error;
@@ -332,12 +332,12 @@ impl<I, E> Builder<I, E> {
         I: Stream,
         I::Error: Into<Box<::std::error::Error + Send + Sync>>,
         I::Item: AsyncRead + AsyncWrite + Send + 'static,
-        S: NewService<ReqBody=Body, ResBody=B>,
-        S::Error: Into<Box<::std::error::Error + Send + Sync>>,
-        S::Service: 'static,
+        S: MakeService<I::Item, ReqBody=Body, ResBody=B, ResBody2=B>,
+        S::Error2: Into<Box<::std::error::Error + Send + Sync>>,
+        S::Service2: 'static,
         B: Payload,
-        E: NewSvcExec<I::Item, S::Future, S::Service, E, NoopWatcher>,
-        E: H2Exec<<S::Service as Service>::Future, B>,
+        E: NewSvcExec<I::Item, S::Future2, S::Service2, E, NoopWatcher>,
+        E: H2Exec<<S::Service2 as Service>::Future, B>,
     {
         let serve = self.protocol.serve_incoming(self.incoming, new_service);
         let spawn_all = serve.spawn_all();

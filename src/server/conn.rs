@@ -28,12 +28,13 @@ use proto;
 use service::{NewService, Service};
 use upgrade::Upgraded;
 
+pub(super) use self::make_service::MakeService;
 pub(super) use self::spawn_all::NoopWatcher;
 use self::spawn_all::NewSvcTask;
 pub(super) use self::spawn_all::Watcher;
 pub(super) use self::upgrades::UpgradeableConnection;
 
-#[cfg(feature = "runtime")] pub use super::tcp::AddrIncoming;
+#[cfg(feature = "runtime")] pub use super::tcp::{AddrIncoming, AddrStream};
 
 /// A lower-level configuration of the HTTP protocol.
 ///
@@ -49,6 +50,12 @@ pub struct Http<E = Exec> {
     keep_alive: bool,
     max_buf_size: Option<usize>,
     pipeline_flush: bool,
+}
+
+/// dox
+pub trait RemoteAddr {
+    /// dox
+    fn remote_addr(&self) -> SocketAddr;
 }
 
 /// The internal mode of HTTP protocol which indicates the behavior when a parse error occurs.
@@ -393,10 +400,14 @@ impl<E> Http<E> {
         I: Stream,
         I::Error: Into<Box<::std::error::Error + Send + Sync>>,
         I::Item: AsyncRead + AsyncWrite,
-        S: NewService<ReqBody=Body, ResBody=Bd>,
-        S::Error: Into<Box<::std::error::Error + Send + Sync>>,
+        S: MakeService<
+            I::Item,
+            ReqBody=Body,
+            ResBody=Bd,
+        >,
+        S::Error2: Into<Box<::std::error::Error + Send + Sync>>,
         Bd: Payload,
-        E: H2Exec<<S::Service as Service>::Future, Bd>,
+        E: H2Exec<<S::Service2 as Service>::Future, Bd>,
     {
         Serve {
             incoming: incoming,
@@ -604,17 +615,18 @@ where
     I: Stream,
     I::Item: AsyncRead + AsyncWrite,
     I::Error: Into<Box<::std::error::Error + Send + Sync>>,
-    S: NewService<ReqBody=Body, ResBody=B>,
-    S::Error: Into<Box<::std::error::Error + Send + Sync>>,
+    S: MakeService<I::Item, ReqBody=Body, ResBody=B>,
+    //S::Error2: Into<Box<::std::error::Error + Send + Sync>>,
+    //SME: Into<Box<::std::error::Error + Send + Sync>>,
     B: Payload,
-    E: H2Exec<<S::Service as Service>::Future, B>,
+    E: H2Exec<<S::Service2 as Service>::Future, B>,
 {
-    type Item = Connecting<I::Item, S::Future, E>;
+    type Item = Connecting<I::Item, S::Future2, E>;
     type Error = ::Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         if let Some(io) = try_ready!(self.incoming.poll().map_err(::Error::new_accept)) {
-            let new_fut = self.new_service.new_service();
+            let new_fut = self.new_service.make_service2(&io);
             Ok(Async::Ready(Some(Connecting {
                 future: new_fut,
                 io: Some(io),
@@ -666,15 +678,19 @@ where
     I: Stream,
     I::Error: Into<Box<::std::error::Error + Send + Sync>>,
     I::Item: AsyncRead + AsyncWrite + Send + 'static,
-    S: NewService<ReqBody=Body, ResBody=B>,
-    S::Error: Into<Box<::std::error::Error + Send + Sync>>,
+    S: MakeService<
+        I::Item,
+        ReqBody=Body,
+        ResBody=B,
+        ResBody2=B,
+    >,
     B: Payload,
-    E: H2Exec<<S::Service as Service>::Future, B>,
+    E: H2Exec<<S::Service2 as Service>::Future, B>,
 {
     pub(super) fn poll_watch<W>(&mut self, watcher: &W) -> Poll<(), ::Error>
     where
-        E: NewSvcExec<I::Item, S::Future, S::Service, E, W>,
-        W: Watcher<I::Item, S::Service, E>,
+        E: NewSvcExec<I::Item, S::Future2, S::Service2, E, W>,
+        W: Watcher<I::Item, S::Service2, E>,
     {
         loop {
             if let Some(connecting) = try_ready!(self.serve.poll()) {
@@ -873,3 +889,35 @@ mod upgrades {
     }
 }
 
+pub(crate) mod make_service {
+    use std::error::Error as StdError;
+
+    /// An asynchronous constructor of `Service`s.
+    pub trait MakeService<Ctx>: for<'a> ::service::MakeService<&'a Ctx> {
+        type Error2: Into<Box<StdError + Send + Sync>>;
+        type ResBody2: ::body::Payload;
+        type Service2: ::service::Service<ReqBody=::Body, ResBody=Self::ResBody2, Error=Self::Error2>;
+        type Future2: ::futures::Future<Item=Self::Service2>;
+
+        fn make_service2<'a>(&self, ctx: &'a Ctx) -> Self::Future2;
+    }
+
+    impl<T, Ctx, E, ME, S, F, B> MakeService<Ctx> for T
+    where
+        T: for<'a> ::service::MakeService<&'a Ctx, Error=E, MakeError=ME, Service=S, Future=F, ReqBody=::Body, ResBody=B>,
+        E: Into<Box<StdError + Send + Sync>>,
+        ME: Into<Box<StdError + Send + Sync>>,
+        S: ::service::Service<ReqBody=::Body, ResBody=B, Error=E>,
+        F: ::futures::Future<Item=S, Error=ME>,
+        B: ::body::Payload,
+    {
+        type Error2 = E;
+        type Service2 = S;
+        type ResBody2 = B;
+        type Future2 = F;
+
+        fn make_service2<'a>(&self, ctx: &'a Ctx) -> Self::Future2 {
+            self.make_service(ctx)
+        }
+    }
+}
